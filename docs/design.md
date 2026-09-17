@@ -24,7 +24,9 @@ Motor Driver
 N20 Motor + Encoder Feedback
 ```
 
-当前只使用一个周期性 FreeRTOS 任务：`freertos.c` 每 100 ms 调度一次 `Motion_Update()`；`motion.c` 负责运动流程；`controller.c` 保存控制计算及其私有状态。
+当前只使用一个周期性 FreeRTOS 任务：`freertos.c` 每 20 ms 调度一次 `Motion_Update()`；`motion.c` 负责运动流程；`controller.c` 保存控制计算及其私有状态。
+
+当前装配状态下，以约 `2150 PWM / 42 RPM` 作为低速 Feedforward 标定边界点，低于该区间采用平滑插值，避免将中高速标定关系直接外推到零速附近。
 
 ## 3. Motion State Machine
 

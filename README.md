@@ -17,8 +17,10 @@
 - `+80 RPM` / `-80 RPM` 双向速度闭环
 - Stop Response 与轻微手动负载扰动恢复
 - Position P -> Trajectory -> Speed PI 串级控制
-- Acceleration-Limited Trajectory：最大 `60 RPM`，最大加速度 `100 RPM/s`
+- 20 ms 周期的 Acceleration-Limited Trajectory：最大 `60 RPM`，最大加速度 `100 RPM/s`
 - `±700`、`±1400`、`±2800 Count` 相对定位；最终均进入配置的 `±100 Count` 容差
+- 当前机构的 `+2800 Count` 验证最终停在 `2871 Count`，误差 `+71 Count`
+- 当前机构的 `-2800 Count` 验证最终停在 `-2709 Count`，误差 `+91 Count`
 - `HOME_SIM` Homing 软件状态机，以及 Homing 10 秒超时 -> `FAULT`
 
 ### 下一步
@@ -53,7 +55,7 @@ Motor Driver
 N20 Motor + Encoder Feedback
 ```
 
-`motion.c` 是唯一允许写入 PWM 的模块。`controller.c` 负责 Speed PI、Position Controller、Feedforward、Integral Limit、Conditional Anti-Windup 与 Trajectory 计算；FreeRTOS 任务每 100 ms 调用一次 `Motion_Update()`。
+`motion.c` 是唯一允许写入 PWM 的模块。`controller.c` 负责 Speed PI、Position Controller、Feedforward、Integral Limit、Conditional Anti-Windup 与 Trajectory 计算；FreeRTOS 任务每 20 ms 调用一次 `Motion_Update()`。
 
 ## 4. Motion State Machine
 
@@ -72,12 +74,23 @@ INIT -> IDLE -> READY
 
 ## 5. 实机验证
 
+### 早期模块验证
+
+以下两张图记录了速度控制开发阶段的实机验证，用于证明 Speed PI 和 Conditional Anti-Windup 模块已经完成验证；它们不表示当前 20 ms 周期下重新采集的数据。
+
 | 证据 | 支持的结论 |
 | --- | --- |
 | ![Speed PI 响应](docs/images/speed_pi_response.png) | Speed PI 闭环响应 |
 | ![Anti-Windup 响应](docs/images/speed_anti_windup.png) | Conditional Anti-Windup 行为 |
-| ![轨迹速度响应](docs/images/cascade_trajectory_speed_response.png) | 串级控制中的 Acceleration-Limited Trajectory |
-| ![位置响应](docs/images/position_response_initial.png) | `+2800 Count` 初步响应；过冲修正后进入容差 |
+
+### 当前 20 ms 综合验证
+
+以下两张图在当前机械装配与 20 ms 控制周期下采集，展示 Position Controller -> Trajectory -> Speed PI 的正反向完整控制链路。
+
+| 证据 | 支持的结论 |
+| --- | --- |
+| ![正向轨迹与位置响应](docs/images/position_cascade_trajectory_plus2800.png) | `+2800 Count`：Trajectory 平滑加减速，最终误差 `+71 Count` |
+| ![反向轨迹与位置响应](docs/images/position_cascade_trajectory_minus2800.png) | `-2800 Count`：反向 Trajectory 与位置闭环，最终误差 `+91 Count` |
 
 `speed_pi_restart_overshoot_pre_anti_windup.png` 保留在 `docs/images`，用于工程过程对照，不作为 README 主验证图。
 
@@ -89,6 +102,7 @@ INIT -> IDLE -> READY
 - Encoder：TIM4 Encoder Mode（PD12 / PD13）
 - Homing 模拟输入：PA0（`HOME_SIM`）
 - 调试串口：USART1，115200 bps
+- 运动控制周期：20 ms
 - 工具：STM32CubeMX、STM32CubeIDE、Git
 
 ## 7. 仓库结构
@@ -107,6 +121,8 @@ docs/
 ## 8. 当前限制与后续计划
 
 Project25 当前仍以完成运动控制节点核心闭环为目标。
+
+当前机械装配下的低速 Feedforward 标定边界点约为 `2150 PWM / 42 RPM`。低于该速度区间的 Feedforward 采用平滑插值，避免低速段直接施加大 PWM；该标定关系仅适用于当前 N20、法兰轮毂和摇臂装配状态。
 
 ### 近期收口
 
