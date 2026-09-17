@@ -30,6 +30,7 @@ void MX_FREERTOS_Init(void); /* (MISRA C 2004 rule 8.1) */
 void MX_FREERTOS_Init(void)
 {
   /* USER CODE BEGIN Init */
+	// 在创建任务前完成运动模块的外设启动与状态清零
 	Motion_Init();
 
   /* USER CODE END Init */
@@ -49,13 +50,15 @@ void MX_FREERTOS_Init(void)
 void Motion_Task(void *argument)
 {
   /* USER CODE BEGIN Motion_Task */
+	// osDelayUntil 使用绝对 tick，避免循环执行耗时逐步累积成周期漂移
 	uint32_t next_wake_tick = osKernelGetTickCount();
 
 	for(;;)
 	{
+		// 单一任务统一拥有运动状态、控制计算和 PWM 输出
 		Motion_Update();
 
-		next_wake_tick += 100;
+		next_wake_tick += 20;
 		osDelayUntil(next_wake_tick);
 	}
   /* USER CODE END Motion_Task */
