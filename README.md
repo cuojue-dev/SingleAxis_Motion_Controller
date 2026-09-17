@@ -1,75 +1,128 @@
-# 25_SingleAxis_Motion_Controller
+# Project25 单轴闭环运动控制节点
 
-这是一个基于 STM32F103、FreeRTOS、N20 有刷直流减速电机和 AB 增量编码器的**单轴闭环运动控制学习项目**。
+## 1. 项目简介
 
-项目计划实现一个缩小版但结构完整的运动控制节点：系统上电后通过 Homing 建立机械参考坐标，接收速度或位置命令，在软硬件限位和故障保护下驱动电机完成闭环运动。
+基于 STM32F103、FreeRTOS、N20 有刷减速电机、AB 增量式 Encoder 与 DRV8833 的单轴闭环运动控制项目。
 
-机械摇臂只作为 Homing、限位、位置控制和重复定位的测试装置，不是项目本体。
+当前版本聚焦一条完整且可阅读的控制链路：Encoder 反馈、Speed Control、相对位置控制、Acceleration-Limited Trajectory、Motion State Machine，以及初步的 Homing / Fault 流程。
 
-## 为什么做这个项目
+## 2. 当前状态
 
-Project24 已经完成了 N20 电机的速度闭环和位置—速度串级控制，验证了基本控制算法能够驱动电机到达目标速度和目标位置。
+**Work in Progress**
 
-Project25 不再以继续研究 PID 公式为主要目标，而是学习如何把已有的控制能力组织成一个完整的嵌入式运动控制系统，包括状态管理、运动命令、Homing、限位、故障处理、通信、参数管理和系统监控。
+### 已上板观察验证
 
-项目希望训练的不只是“让电机转起来”，而是理解一个运动控制设备如何从上电初始化、建立坐标、接收命令和执行运动，一直运行到异常检测与安全停止。
+- Feedforward、Speed P 与 Speed PI
+- Integral Limit 与 Conditional Anti-Windup
+- `+80 RPM` / `-80 RPM` 双向速度闭环
+- Stop Response 与轻微手动负载扰动恢复
+- Position P -> Trajectory -> Speed PI 串级控制
+- Acceleration-Limited Trajectory：最大 `60 RPM`，最大加速度 `100 RPM/s`
+- `±700`、`±1400`、`±2800 Count` 相对定位；最终均进入配置的 `±100 Count` 容差
+- `HOME_SIM` Homing 软件状态机，以及 Homing 10 秒超时 -> `FAULT`
 
-## 硬件与软件平台
+### 下一步
 
-### 硬件
+- Software Position Limit
+- Basic Fault Handling / Fault Reset
 
-- STM32F103ZET6
-- 正点原子精英 STM32F103 开发板 V2.6
-- N20 6 V 有刷直流减速电机
-- AB 增量编码器
-- DRV8833 电机驱动模块
-- KW11 微动开关，计划用作 HOME/MIN 和 MAX 硬件限位
-- 自制单轴机械测试台架
+### 尚未完成真实机械验证
 
-第一版计划继续采用 Project24 已经验证过的 5 V 电机供电条件。
+- KW11 Mechanical Homing
+- Homing Repeatability
+- Hardware Limit
+- Final Mechanical Zero Reference
 
-### 软件
+`HOME_SIM` 是用于验证软件状态机路径的板载输入，不代表最终机械 Homing 的重复精度。
 
-- STM32CubeMX
-- STM32CubeIDE
-- STM32 HAL
-- FreeRTOS + CMSIS-RTOS2
-- Git
-- VS Code
+## 3. 控制架构
 
-STM32CubeIDE 负责工程配置、编译、下载和调试；VS Code 主要用于文档编写、工程浏览、搜索和 Git 操作。
+```text
+Position Controller
+        |
+        v
+Trajectory / Acceleration Limit
+        |
+        v
+Speed PI + Feedforward
+        |
+        v
+Motor Driver
+        |
+        v
+N20 Motor + Encoder Feedback
+```
 
-## v1.0 计划能力
+`motion.c` 是唯一允许写入 PWM 的模块。`controller.c` 负责 Speed PI、Position Controller、Feedforward、Integral Limit、Conditional Anti-Windup 与 Trajectory 计算；FreeRTOS 任务每 100 ms 调用一次 `Motion_Update()`。
 
-- Speed Mode（速度模式）
-- Position Mode（位置模式）
-- Homing（回零并建立机械坐标）
-- MIN/MAX 硬件限位
-- Software Position Limit（软件位置限位）
-- 运动状态机
-- Trapezoidal Motion Profile（梯形运动轨迹）
-- 故障检测与安全停止
-- RS485 / Modbus RTU 控制与状态读取
-- 运行参数管理
-- FreeRTOS Task 健康监控与 IWDG
+## 4. Motion State Machine
 
-通信模块只负责产生运动命令，电机输出仍由运动控制模块统一管理。
+```text
+INIT -> IDLE -> READY
+                  |  \
+                  |   \ position command
+                  |    -> RUN_POSITION -> READY
+                  |
+                  +---- home command -> HOMING -> READY
+                                           |
+                                           +-- timeout -> FAULT
+```
 
-## 当前开发状态
+进入 `FAULT` 后 PWM 被关闭，系统不会自动继续故障前的命令。当前 Homing 使用 `HOME_SIM` 验证状态机；真实限位开关行为仍待验证。
 
-项目目前处于 Phase 0 设计阶段。
+## 5. 实机验证
 
-已经完成：
+| 证据 | 支持的结论 |
+| --- | --- |
+| ![Speed PI 响应](docs/images/speed_pi_response.png) | Speed PI 闭环响应 |
+| ![Anti-Windup 响应](docs/images/speed_anti_windup.png) | Conditional Anti-Windup 行为 |
+| ![轨迹速度响应](docs/images/cascade_trajectory_speed_response.png) | 串级控制中的 Acceleration-Limited Trajectory |
+| ![位置响应](docs/images/position_response_initial.png) | `+2800 Count` 初步响应；过冲修正后进入容差 |
 
-- 建立独立 Git 仓库
-- 创建 README 和初始设计文档目录
-- 确定项目定位、第一版范围和阶段开发路线
-- 确定以 Project24 作为控制算法原型
+`speed_pi_restart_overshoot_pre_anti_windup.png` 保留在 `docs/images`，用于工程过程对照，不作为 README 主验证图。
 
-尚未开始：
+## 6. 硬件 / 软件环境
 
-- 创建 STM32CubeIDE / FreeRTOS 固件工程
-- 迁移 Motor、Encoder 和 Controller 模块
-- 编译、下载和 Project25 上板验证
+- MCU：STM32F103ZET6
+- RTOS：FreeRTOS + CMSIS-RTOS2
+- Motor Driver：DRV8833，TIM3 PWM（PA6 / PA7）
+- Encoder：TIM4 Encoder Mode（PD12 / PD13）
+- Homing 模拟输入：PA0（`HOME_SIM`）
+- 调试串口：USART1，115200 bps
+- 工具：STM32CubeMX、STM32CubeIDE、Git
 
-因此，本 README 中列出的 v1.0 能力均为计划目标，不代表当前已经实现。
+## 7. 仓库结构
+
+```text
+Firmware/
+  Core/Src/freertos.c      FreeRTOS 任务创建与周期调度
+  Core/Src/motion.c        状态机、Homing、Encoder/PWM 运动流程
+  Core/Src/controller.c    Feedforward、PI、Position P、Trajectory
+  Core/Inc/                对应头文件与 CubeMX 生成头文件
+docs/
+  design.md                设计说明与当前边界
+  images/                  已筛选的验证证据
+```
+
+## 8. 当前限制与后续计划
+
+Project25 当前仍以完成运动控制节点核心闭环为目标。
+
+### 近期收口
+
+- Software Position Limit
+- Basic Fault Handling / Fault Reset
+- 真实 KW11 Mechanical Homing
+- Homing Repeatability
+- KW11 Hardware Limit
+- 真实 Mechanical Zero Reference
+
+### 可选扩展
+
+- 轻量 Command Interface
+- Modbus RTU
+- Parameter Persistence
+- IWDG / Task Monitor
+- 更完整的 Fault Diagnostics
+
+更多设计边界见 [docs/design.md](docs/design.md)。
