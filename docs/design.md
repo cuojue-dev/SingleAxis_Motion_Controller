@@ -26,6 +26,8 @@ N20 Motor + Encoder Feedback
 
 当前只使用一个周期性 FreeRTOS 任务：`freertos.c` 每 20 ms 调度一次 `Motion_Update()`；`motion.c` 负责运动流程；`controller.c` 保存控制计算及其私有状态。
 
+当前控制链并不依赖多任务并发，使用裸机定时调度也能实现同等控制行为。FreeRTOS 在当前阶段只提供周期调度基础；Motion Command / Status API 用于隔离未来通信调用方与内部状态机，外部模块不能直接访问 PWM 或修改 `motion_context_t`。
+
 当前装配状态下，以约 `2150 PWM / 42 RPM` 作为低速 Feedforward 标定边界点，低于该区间采用平滑插值，避免将中高速标定关系直接外推到零速附近。
 
 ## 3. Motion State Machine
@@ -43,7 +45,7 @@ INIT -> IDLE -> READY
 
 `FAULT` 会强制 PWM 为零，且不会自动恢复之前的命令。源码中保留 `RUN_SPEED` 枚举状态，但当前尚未形成独立速度命令流程；进入该状态时输出为零。
 
-当前位置与 Homing 命令仍是本地验证标志，尚不是通信命令接口。
+Home、Position 与 Fault Reset 已通过 Motion Request API 提交，状态和反馈通过 Status API 读取；当前尚未实现 UART 或 Modbus 命令解析。
 
 ## 4. Homing 设计
 
@@ -53,7 +55,7 @@ INIT -> IDLE -> READY
 
 ## 5. Limit / Fault 设计
 
-当前代码已经包含 Homing Timeout -> `FAULT` 的最小故障路径。Software Position Limit 与 Hardware Limit 是下一实现阶段，当前不宣称已实现或已上板验证。
+当前代码已经包含 Homed 门控、Homing Timeout、Software Position Limit、Fault 停机与显式 Fault Reset。Software Position Limit 仍使用 `±3500 Count` 软件测试范围；Hardware Limit 尚未实现。
 
 后续实现遵守以下规则：
 
@@ -69,8 +71,6 @@ INIT -> IDLE -> READY
 
 ## 7. 近期收口
 
-- Software Position Limit
-- Basic Fault Handling / Fault Reset
 - 真实 KW11 Mechanical Homing
 - Homing Repeatability
 - Hardware Limit

@@ -22,11 +22,16 @@
 - 当前机构的 `+2800 Count` 验证最终停在 `2871 Count`，误差 `+71 Count`
 - 当前机构的 `-2800 Count` 验证最终停在 `-2709 Count`，误差 `+91 Count`
 - `HOME_SIM` Homing 软件状态机，以及 Homing 10 秒超时 -> `FAULT`
+- 未 Homed 时拒绝位置命令，并报告 `FAULT_NOT_HOMED`
+- Software Position Limit、Fault 停机与显式 Fault Reset
+- Motion Command / Status API，外部模块不能直接控制 PWM 或修改内部状态
 
 ### 下一步
 
-- Software Position Limit
-- Basic Fault Handling / Fault Reset
+- 真实 KW11 Mechanical Homing
+- Homing Repeatability
+- Hardware Limit
+- 根据真实机械行程确定最终 Software Position Limit
 
 ### 尚未完成真实机械验证
 
@@ -56,6 +61,10 @@ N20 Motor + Encoder Feedback
 ```
 
 `motion.c` 是唯一允许写入 PWM 的模块。`controller.c` 负责 Speed PI、Position Controller、Feedforward、Integral Limit、Conditional Anti-Windup 与 Trajectory 计算；FreeRTOS 任务每 20 ms 调用一次 `Motion_Update()`。
+
+### FreeRTOS 在当前版本中的作用
+
+当前固件只有一个核心业务任务 `Motion_Task`，任务循环只负责每 20 ms 调用一次 `Motion_Update()`。现有控制功能也可以使用裸机定时调度实现，FreeRTOS 在本项目中不是控制算法成立的必要条件；当前主要用于提供稳定的周期执行环境，并提前建立未来通信任务与 Motion Command API 之间的职责边界。
 
 ## 4. Motion State Machine
 
@@ -112,7 +121,8 @@ Firmware/
   Core/Src/freertos.c      FreeRTOS 任务创建与周期调度
   Core/Src/motion.c        状态机、Homing、Encoder/PWM 运动流程
   Core/Src/controller.c    Feedforward、PI、Position P、Trajectory
-  Core/Inc/                对应头文件与 CubeMX 生成头文件
+  Core/Inc/motion.h        Motion Command / Status 公共接口
+  Core/Inc/                其余模块头文件与 CubeMX 生成头文件
 docs/
   design.md                设计说明与当前边界
   images/                  已筛选的验证证据
@@ -126,8 +136,6 @@ Project25 当前仍以完成运动控制节点核心闭环为目标。
 
 ### 近期收口
 
-- Software Position Limit
-- Basic Fault Handling / Fault Reset
 - 真实 KW11 Mechanical Homing
 - Homing Repeatability
 - KW11 Hardware Limit
