@@ -10,39 +10,22 @@
 #include "tim.h"
 #include "usart.h"
 
-typedef enum
-{
-	MOTION_STATE_INIT = 0,
-	MOTION_STATE_IDLE,
-	MOTION_STATE_READY,
-	MOTION_STATE_RUN_SPEED,
-	MOTION_STATE_RUN_POSITION,
-	MOTION_STATE_HOMING,
-	MOTION_STATE_FAULT
-} motion_state_t;
 
-typedef enum
-{
-	MOTION_FAULT_NONE = 0,
-	MOTION_FAULT_NOT_HOMED,
-	MOTION_FAULT_SOFT_LIMIT,
-	MOTION_FAULT_HOME_TIMEOUT
-} motion_fault_t;
 
 // 运行期间保持不变的运动控制参数
 typedef struct
 {
-	float speed_kp;
-	float speed_ki;
-	float position_kp;
-	float max_position_rpm;
-	float max_acceleration_rpm_s;
-	float home_rpm;
+	float speed_kp;                 // 速度环比例增益
+	float speed_ki;                 // 速度环积分增益
+	float position_kp;              // 位置环比例增益
+	float max_position_rpm;         // 位置模式最大速度
+	float max_acceleration_rpm_s;   // Trajectory 最大加速度
+	float home_rpm;                 // Homing 搜索速度
 
-	int32_t position_tolerance;
-	int32_t soft_limit_min;
-	int32_t soft_limit_max;
-	uint32_t homing_timeout_ms;
+	int32_t position_tolerance;     // 到位允许误差
+	int32_t soft_limit_min;         // 当前软件测试下限
+	int32_t soft_limit_max;         // 当前软件测试上限
+	uint32_t homing_timeout_ms;     // Homing 最大持续时间
 } motion_config_t;
 
 // 运动状态机每个周期都会读写的运行状态
@@ -51,9 +34,10 @@ typedef struct
 	motion_state_t state;
 	motion_fault_t fault;
 
-	uint8_t homed;
-	uint8_t home_command_pending;
-	uint8_t position_command_pending;
+	uint8_t homed;                    // 机械坐标是否有效
+	uint8_t home_command_pending;      // 等待 Motion_Update 消费的 Home 命令
+	uint8_t position_command_pending;  // 等待 Motion_Update 消费的位置命令
+	uint8_t fault_reset_pending;       // 等待 Motion_Update 消费的 Fault Reset 命令
 
 	uint16_t current_count;
 	uint16_t last_count;
@@ -80,7 +64,7 @@ static const motion_config_t s_config = {
 	.position_tolerance = 100,
 	.soft_limit_min = -3500,
 	.soft_limit_max = 3500,
-	.homing_timeout_ms = 10000
+	.homing_timeout_ms = 10000,
 };
 
 static motion_context_t s_motion;
@@ -231,7 +215,8 @@ void Motion_Init(void)
 		.homed = 0,
 		.home_command_pending = 0,
 		.position_command_pending = 0,
-		.target_position = 2800
+		.target_position = 2800,
+		.fault_reset_pending = 0,
 	};
 
 	Motion_Stop_And_Reset_Control();
@@ -362,18 +347,25 @@ void Motion_Update(void)
 		case MOTION_STATE_FAULT:
 			Motion_Stop_And_Reset_Control();
 
-			// PA0 当前作为临时 FAULT_RESET_SIM
+		    // PA0 只是 Fault Reset 命令的一个临时来源
 			if(HAL_GPIO_ReadPin(HOME_SIM_GPIO_Port, HOME_SIM_Pin) == GPIO_PIN_SET)
 			{
+				s_motion.fault_reset_pending = 1;
+			}
+
+			// 无论命令来自 PA0 还是公开 API，都走同一条 Reset 路径
+			if(s_motion.fault_reset_pending)
+			{
+				s_motion.fault_reset_pending = 0;
 				s_motion.fault = MOTION_FAULT_NONE;
 				s_motion.position_command_pending = 0;
 				s_motion.home_command_pending = 0;
 				s_motion.state = MOTION_STATE_IDLE;
 
 				HAL_UART_Transmit(&huart1,
-				                  (uint8_t *)"FAULT_RESET_OK\r\n",
-				                  (uint16_t)(sizeof("FAULT_RESET_OK\r\n") - 1U),
-				                  100);
+						(uint8_t *)"FAULT_RESET_OK\r\n",
+						(uint16_t)(sizeof("FAULT_RESET_OK\r\n") - 1U),
+						100);
 			}
 			break;
 
@@ -384,4 +376,72 @@ void Motion_Update(void)
 	}
 
 	Motion_Send_Debug_Log();
+}
+
+motion_request_result_t Motion_Request_Home(void)
+{
+	// 只允许 READY 接收新命令，避免外部代码打断正在执行的运动
+	if(s_motion.state != MOTION_STATE_READY)
+	{
+		return MOTION_REQUEST_INVALID_STATE;
+	}
+
+	if(s_motion.home_command_pending ||
+	   s_motion.position_command_pending)
+	{
+		return MOTION_REQUEST_BUSY;
+	}
+
+	// 实际进入 HOMING 由下一次 Motion_Update 完成
+	s_motion.home_command_pending = 1;
+
+	return MOTION_REQUEST_OK;
+}
+
+motion_request_result_t Motion_Request_Position(int32_t target_position)
+{
+	// Request 层只提交目标，Homed 和 Soft Limit 由状态机统一校验
+	if(s_motion.state != MOTION_STATE_READY)
+	{
+		return MOTION_REQUEST_INVALID_STATE;
+	}
+
+	if(s_motion.home_command_pending ||
+	   s_motion.position_command_pending)
+	{
+		return MOTION_REQUEST_BUSY;
+	}
+
+	s_motion.target_position = target_position;
+	s_motion.position_command_pending = 1;
+
+	return MOTION_REQUEST_OK;
+}
+
+motion_request_result_t Motion_Request_Fault_Reset(void)
+{
+	// Reset 只能清除已经进入的 Fault，不能当作普通停止命令
+	if(s_motion.state != MOTION_STATE_FAULT)
+	{
+		return MOTION_REQUEST_INVALID_STATE;
+	}
+
+	s_motion.fault_reset_pending = 1;
+
+	return MOTION_REQUEST_OK;
+}
+
+void Motion_Get_Status(motion_status_t *status)
+{
+	if(status == NULL)
+	{
+		return;
+	}
+
+	// 复制必要字段，外部模块无法直接修改内部 Context
+	status->state = s_motion.state;
+	status->fault = s_motion.fault;
+	status->homed = s_motion.homed;
+	status->position_count = s_motion.position_count;
+	status->motor_rpm = s_motion.motor_rpm;
 }
